@@ -1,139 +1,120 @@
-Phase 1 — Online Check-In + SIBA/SEF Submission
+# Phase 1 — Online Check-In + SIBA/SEF Submission
 
-This document defines the complete functional and technical scope for Phase 1 of the HostSync platform.
+This document defines the complete functional and technical scope for **Phase 1** of the HostSync platform.
 
 Phase 1 delivers a legally compliant online guest check-in flow with automated SIBA/SEF submission for Portuguese accommodation providers.
 
-HostSync acts as Data Processor.
+**HostSync acts as Data Processor.**  
 Clients act as Data Controllers and are responsible for long-term legal archiving.
 
-1. Scope of Phase 1
+---
+
+## 1. Scope of Phase 1
 
 Phase 1 includes:
 
-Booking ingestion via channel manager webhook (create/update/cancel)
+- Booking ingestion via channel manager webhook (create/update/cancel)
+- Guest online check-in via secure tokenized URL
+- Secure storage of booking and guest data
+- Automatic SIBA/SEF submission (Portugal)
+- Export batching every 15 days
+- Delivery of exports via cloud storage or encrypted email fallback
+- GDPR-aligned data retention and deletion
+- Customer admin UI (operational visibility)
+- Guest-facing check-in UI
 
-Guest online check-in via secure tokenized URL
+---
 
-Secure storage of booking and guest data
+## 2. Out of Scope (Non-Goals)
 
-Automatic SIBA/SEF submission (Portugal)
+The following are explicitly **not included** in Phase 1:
 
-Export batching every 15 days
-
-Delivery of exports via cloud storage or encrypted email fallback
-
-GDPR-aligned data retention and deletion
-
-Customer admin UI (operational visibility)
-
-Guest-facing check-in UI
-
-2. Out of Scope (Non-Goals)
-
-The following are explicitly not included in Phase 1:
-
-Payment processing
-
-Guest messaging
-
-Portuguese invoicing integrations
-
-HostSync billing system
-
-INE reporting
-
-Booking portal
-
-Analytics dashboards
+- Payment processing
+- Guest messaging
+- Portuguese invoicing integrations
+- HostSync billing system
+- INE reporting
+- Booking portal
+- Analytics dashboards
 
 These belong to future phases.
 
-3. Tenant & Authentication Model
+---
 
-HostSync is a multi-tenant platform.
+## 3. Tenant & Authentication Model
+
+HostSync is a **multi-tenant platform**.
 
 Each customer is a tenant.
 
-All data objects are strictly isolated by tenant_id.
+All data objects are strictly isolated by `tenant_id`.
 
 Each tenant has:
 
-tenant_id
+- `tenant_id`
+- Channel manager API credentials
+- SIBA/SEF credentials
 
-Channel manager API credentials
+### Rules
 
-SIBA/SEF credentials
+- Every webhook request must identify the tenant.
+- No cross-tenant data access is permitted.
+- Admin UI access is authenticated and tenant-scoped.
+- Tenant isolation must be enforced at database level.
 
-Rules
+---
 
-Every webhook request must identify the tenant.
-
-No cross-tenant data access is permitted.
-
-Admin UI access is authenticated and tenant-scoped.
-
-Tenant isolation must be enforced at database level.
-
-4. Core Entities (Minimum)
+## 4. Core Entities (Minimum)
 
 Phase 1 must implement at least the following entities:
 
-tenants
+- `tenants`
+- `bookings`
+- `guests`
+- `checkin_tokens`
+- `sef_submissions`
+- `export_batches`
+- `export_batch_records`
+- `audit_logs` (no PII)
 
-bookings
+---
 
-guests
-
-checkin_tokens
-
-sef_submissions
-
-export_batches
-
-export_batch_records
-
-audit_logs (no PII)
-
-5. Booking Ingestion (Channel Manager Webhooks)
+## 5. Booking Ingestion (Channel Manager Webhooks)
 
 HostSync receives booking updates via webhook from the channel manager.
 
-Webhook Characteristics
+### Webhook Characteristics
 
-Payload is an array
+- Payload is an **array**
+- May contain one or multiple bookings
+- Delivery is **at-least-once**
+- Processing must be **fully idempotent**
 
-May contain one or multiple bookings
-
-Delivery is at-least-once
-
-Processing must be fully idempotent
-
-Required Behavior
+### Required Behavior
 
 Each webhook must:
 
-Create booking if new
+- Create booking if new
+- Update booking if existing (upsert logic)
 
-Update booking if existing (upsert logic)
+If `booking.status = cancelled`:
 
-If booking.status = cancelled:
+- Mark booking as cancelled internally
+- Invalidate existing check-in token
+- Prevent guest check-in emails
+- Cancel any scheduled SIBA/SEF jobs
 
-Mark booking as cancelled internally
-
-Invalidate existing check-in token
-
-Prevent guest check-in emails
-
-Cancel any scheduled SIBA/SEF jobs
-
-The full webhook payload (including invoiceItems) must be stored as raw JSON for operational and future automation use.
+The full webhook payload (including `invoiceItems`) must be stored as raw JSON for operational and future automation use.
 
 HostSync is not an accounting system of record.
 
 Guest identity fields may initially be empty and are completed later via check-in.
 
-Example Booking Webhook Payload (Simplified Real Structure)
+---
+
+### Example Booking Webhook Payload (Simplified Real Structure)
+
+```json
 [
   {
     "timeStamp": "2026-02-15T10:07:22Z",
@@ -173,26 +154,23 @@ Example Booking Webhook Payload (Simplified Real Structure)
     "retries": 0
   }
 ]
+```
+### Payload Handling Rules
 
-Payload Handling Rules
+- Payload may contain multiple bookings.
+- Unknown fields must be tolerated.
+- Duplicate deliveries must not create duplicate records.
+- `invoiceItems` must be stored even if unused in Phase 1.
 
-Payload may contain multiple bookings.
+---
 
-Unknown fields must be tolerated.
+## 6. Check-In Link Generation
 
-Duplicate deliveries must not create duplicate records.
+When a booking is received:
 
-invoiceItems must be stored even if unused in Phase 1.
-
-6. Check-In Link Generation
-
-When booking is received:
-
-Generate secure random token (high entropy, unguessable)
-
-Store token hashed server-side
-
-Token validity tied to booking status and dates
+- Generate secure random token (high entropy, unguessable)
+- Store token hashed server-side
+- Token validity tied to booking status and dates
 
 HostSync must call channel manager API:
 
@@ -201,276 +179,239 @@ GuestCheckIn_URL=https://hostsync/checkin/{token}
 
 If booking becomes cancelled:
 
-Token must become invalid immediately
+- Token must become invalid immediately
 
-7. Guest Online Check-In
+---
+
+## 7. Guest Online Check-In
 
 Access is token-based only.
 
-No booking ID or name lookup.
+- No booking ID or name lookup.
 
 Guest must complete legally required SIBA/SEF fields:
 
-Identity document details
+- Identity document details
+- Nationality
+- Address
+- Arrival/departure confirmation
+- Other required legal fields
 
-Nationality
-
-Address
-
-Arrival/departure confirmation
-
-Other required legal fields
-
-On Successful Submission
+### On Successful Submission
 
 HostSync must:
 
-Validate fields
-
-Store guest data
-
-Mark check-in completed
-
-Call channel manager API:
+- Validate fields
+- Store guest data
+- Mark check-in completed
+- Call channel manager API:
 
 GuestCheckIn=OK
 
-8. SIBA/SEF Submission
+
+---
+
+## 8. SIBA/SEF Submission
 
 Submission is scheduled:
 
-1 day after check-in completion
+- 1 day after check-in completion
 
 Submission only if:
 
-Booking not cancelled
+- Booking not cancelled
+- Guest data complete
+- Not already successfully submitted
 
-Guest data complete
+### Submission States
 
-Not already successfully submitted
-
-Submission States
-
-pending
-
-retrying
-
-submitted
-
-failed
-
-cancelled
+- `pending`
+- `retrying`
+- `submitted`
+- `failed`
+- `cancelled`
 
 HostSync is always the source of truth.
 
-9. Result Handling
-Success
+---
 
-Mark as submitted
+## 9. Result Handling
 
-Store timestamp and reference ID
+### Success
 
-Call:
+- Mark as `submitted`
+- Store timestamp and reference ID
+- Call:
 
 SIBA_SEF=OK
 
-Permanent Failure (Validation)
+### Permanent Failure (Validation)
 
 Examples:
 
-Missing required fields
-
-Invalid document number
-
-API validation rejection
+- Missing required fields
+- Invalid document number
+- API validation rejection
 
 Actions:
 
-Mark as failed
-
-Store sanitized error message
-
-Call:
+- Mark as `failed`
+- Store sanitized error message
+- Call:
 
 SIBA_SEF=FAIL
 
-Temporary Failure (Retryable)
+
+### Temporary Failure (Retryable)
 
 Examples:
 
-Timeouts
-
-5xx responses
-
-Rate limits
+- Timeouts
+- 5xx responses
+- Rate limits
 
 Actions:
 
-Mark as retrying
+- Mark as `retrying`
+- Retry with exponential backoff
+- Do NOT set FAIL unless retries exhausted
 
-Retry with exponential backoff
+---
 
-Do NOT set FAIL unless retries exhausted
-
-10. Background Jobs & Queues
+## 10. Background Jobs & Queues
 
 All external integrations must be asynchronous.
 
 Queue workers handle:
 
-SIBA/SEF submissions
-
-Export generation
-
-Email delivery
-
-Cloud uploads
+- SIBA/SEF submissions
+- Export generation
+- Email delivery
+- Cloud uploads
 
 Rules:
 
-No blocking HTTP requests
+- No blocking HTTP requests
+- Exponential backoff
+- Default max attempts: 5 (configurable)
 
-Exponential backoff
+---
 
-Default max attempts: 5 (configurable)
-
-11. Export Batches (Every 15 Days)
+## 11. Export Batches (Every 15 Days)
 
 Every 15 days HostSync creates immutable export batches.
 
-Inclusion Rules
+### Inclusion Rules
 
 Include only records where:
 
-Check-in completed
+- Check-in completed
+- Submission status = `submitted`
+- Not included in previous batch
 
-Submission status = submitted
-
-Not included in previous batch
-
-Batch Creation
+### Batch Creation
 
 On creation:
 
-Fix period_start and period_end
+- Fix `period_start` and `period_end`
+- Link records to batch
+- Generate CSV
+- Calculate SHA256
+- Calculate byte size
+- Record count
 
-Link records to batch
+Manual **Generate Batch Now** must be available.
 
-Generate CSV
+---
 
-Calculate SHA256
+## 12. Export Delivery
 
-Calculate byte size
-
-Record count
-
-Manual “Generate Batch Now” must be available.
-
-12. Export Delivery
-Cloud Storage (Preferred)
+### Cloud Storage (Preferred)
 
 If connected:
 
-Upload CSV
+- Upload CSV
+- Store:
+  - Provider file ID
+  - Timestamp
+  - SHA256
+  - Status
 
-Store:
-
-Provider file ID
-
-Timestamp
-
-SHA256
-
-Status
-
-Encrypted Email Fallback
+### Encrypted Email Fallback
 
 If no cloud provider:
 
-Encrypt CSV (ZIP AES or PGP)
+- Encrypt CSV (ZIP AES or PGP)
+- Email to customer
+- Allow UI download for 30 days
 
-Email to customer
+---
 
-Allow UI download for 30 days
+## 13. Retention Rules
 
-13. Retention Rules
-Guest Personal Data
+### Guest Personal Data
 
-Deleted 30 days after checkout
+- Deleted 30 days after checkout
+- Not reconstructable
 
-Not reconstructable
+### Backups & Binlogs
 
-Backups & Binlogs
+- Max 30–35 days retention
+- Encrypted
+- Stored externally
+- Replication ≠ backup
 
-Max 30–35 days retention
+### Export Files
 
-Encrypted
+- Deleted 30 days after batch creation
 
-Stored externally
-
-Replication ≠ backup
-
-Export Files
-
-Deleted 30 days after batch creation
-
-Long-Term Logs (No PII)
+### Long-Term Logs (No PII)
 
 Retained up to 10 years:
 
-export_batch_id
-
-timestamps
-
-success/failure
-
-provider IDs
-
-SHA256
-
-byte size
-
-schema version
+- `export_batch_id`
+- timestamps
+- success/failure
+- provider IDs
+- SHA256
+- byte size
+- schema version
 
 No personal data stored in logs.
 
-14. Customer Admin UI
+---
+
+## 14. Customer Admin UI
 
 Authenticated tenants must access:
 
-Booking list + status
+- Booking list + status
+- Guest check-in status
+- SIBA/SEF status + last error
+- Export batches:
+  - Download (30 days)
+  - Resend
+  - Connect cloud storage
+  - Configure export email
 
-Guest check-in status
+---
 
-SIBA/SEF status + last error
-
-Export batches:
-
-Download (30 days)
-
-Resend
-
-Connect cloud storage
-
-Configure export email
-
-15. Guest UI
+## 15. Guest UI
 
 Token-based page must support:
 
-Check-in form
+- Check-in form
+- Confirmation screen
+- Error states:
+  - Booking cancelled
+  - Link expired
+  - Already submitted
 
-Confirmation screen
+---
 
-Error states:
+## 16. Internal API Endpoints (Minimum)
 
-Booking cancelled
-
-Link expired
-
-Already submitted
-
-16. Internal API Endpoints (Minimum)
+```text
 POST /webhooks/channel-manager
 
 GET  /checkin/{token}
@@ -482,8 +423,9 @@ POST /exports/generate
 
 GET /admin/bookings
 GET /admin/exports
+```
 
-17. Security Requirements
+## 17. Security Requirements
 
 HTTPS enforced
 
@@ -496,5 +438,3 @@ Rate limiting
 Audit logs
 
 Strict tenant isolation
-
-End of Phase 1 Specification
