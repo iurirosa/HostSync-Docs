@@ -1,467 +1,500 @@
-# Phase 1 — Online Check-In + SIBA/SEF Submission
+Phase 1 — Online Check-In + SIBA/SEF Submission
 
-This document defines the complete functional and technical flow for Phase 1 of the HostSync platform.
+This document defines the complete functional and technical scope for Phase 1 of the HostSync platform.
 
-Scope of Phase 1:
-- Booking ingestion via channel manager webhook (create/update/cancel)
-- Guest online check-in via tokenized URL
-- Storage of booking and guest data in HostSync
-- Automatic submission to SIBA/SEF (Portugal)
-- Export batching every 15 days
-- Delivery of exports via cloud storage or encrypted email fallback
-- GDPR-aligned data retention and deletion
+Phase 1 delivers a legally compliant online guest check-in flow with automated SIBA/SEF submission for Portuguese accommodation providers.
 
-HostSync acts as **Data Processor**.  
-Clients act as **Data Controllers** and are responsible for long-term archiving.
+HostSync acts as Data Processor.
+Clients act as Data Controllers and are responsible for long-term legal archiving.
 
----
+1. Scope of Phase 1
 
-## 1. Booking Ingestion (Channel Manager Webhooks)
+Phase 1 includes:
 
-Booking Webhook Payload
+Booking ingestion via channel manager webhook (create/update/cancel)
 
-HostSync receives booking updates via webhook from the channel manager. The webhook payload is delivered as an array and may contain one or multiple booking objects. Delivery must be treated as at-least-once, therefore webhook processing must be fully idempotent.
+Guest online check-in via secure tokenized URL
 
-Each webhook event must upsert the booking in HostSync (create if new, update if existing).
-If booking.status = "cancelled", HostSync must immediately:
+Secure storage of booking and guest data
 
-Mark the booking as cancelled internally
+Automatic SIBA/SEF submission (Portugal)
 
-Invalidate any existing check-in token
+Export batching every 15 days
+
+Delivery of exports via cloud storage or encrypted email fallback
+
+GDPR-aligned data retention and deletion
+
+Customer admin UI (operational visibility)
+
+Guest-facing check-in UI
+
+2. Out of Scope (Non-Goals)
+
+The following are explicitly not included in Phase 1:
+
+Payment processing
+
+Guest messaging
+
+Portuguese invoicing integrations
+
+HostSync billing system
+
+INE reporting
+
+Booking portal
+
+Analytics dashboards
+
+These belong to future phases.
+
+3. Tenant & Authentication Model
+
+HostSync is a multi-tenant platform.
+
+Each customer is a tenant.
+
+All data objects are strictly isolated by tenant_id.
+
+Each tenant has:
+
+tenant_id
+
+Channel manager API credentials
+
+SIBA/SEF credentials
+
+Rules
+
+Every webhook request must identify the tenant.
+
+No cross-tenant data access is permitted.
+
+Admin UI access is authenticated and tenant-scoped.
+
+Tenant isolation must be enforced at database level.
+
+4. Core Entities (Minimum)
+
+Phase 1 must implement at least the following entities:
+
+tenants
+
+bookings
+
+guests
+
+checkin_tokens
+
+sef_submissions
+
+export_batches
+
+export_batch_records
+
+audit_logs (no PII)
+
+5. Booking Ingestion (Channel Manager Webhooks)
+
+HostSync receives booking updates via webhook from the channel manager.
+
+Webhook Characteristics
+
+Payload is an array
+
+May contain one or multiple bookings
+
+Delivery is at-least-once
+
+Processing must be fully idempotent
+
+Required Behavior
+
+Each webhook must:
+
+Create booking if new
+
+Update booking if existing (upsert logic)
+
+If booking.status = cancelled:
+
+Mark booking as cancelled internally
+
+Invalidate existing check-in token
 
 Prevent guest check-in emails
 
-Stop any scheduled SIBA/SEF submission jobs
+Cancel any scheduled SIBA/SEF jobs
 
-The complete webhook payload (including invoiceItems) must be stored as raw JSON for operational use and future automation modules (e.g. invoicing). This data is retained only according to Phase 1 retention rules (deleted 30 days after checkout). HostSync does not act as an accounting system of record.
+The full webhook payload (including invoiceItems) must be stored as raw JSON for operational and future automation use.
 
-Guest identity fields in the webhook may initially be empty and are completed later via the online check-in flow.
+HostSync is not an accounting system of record.
 
-Example Booking Webhook Payload (Real Structure – Simplified)
+Guest identity fields may initially be empty and are completed later via check-in.
 
-```json
+Example Booking Webhook Payload (Simplified Real Structure)
 [
   {
     "timeStamp": "2026-02-15T10:07:22Z",
     "booking": {
       "id": 82279106,
-      "masterId": null,
-      "bookingGroup": null,
       "propertyId": 125517,
       "roomId": 281392,
-      "unitId": 1,
-      "roomQty": 1,
-      "offerId": 1,
       "status": "confirmed",
-      "subStatus": "none",
       "arrival": "2026-02-16",
       "departure": "2026-02-17",
       "numAdult": 2,
       "numChild": 0,
-      "title": "",
       "firstName": "",
       "lastName": "",
       "email": "",
       "phone": "",
-      "mobile": "",
-      "fax": "",
-      "company": "",
-      "address": "",
-      "city": "",
-      "state": "",
-      "postcode": "",
       "country": "",
-      "country2": null,
-      "arrivalTime": "",
-      "voucher": "",
-      "comments": "",
-      "notes": "",
-      "message": "",
-      "groupNote": "",
-      "custom1": "",
-      "custom2": "",
-      "custom3": "",
-      "custom4": "",
-      "custom5": "",
-      "custom6": "",
-      "custom7": "",
-      "custom8": "",
-      "custom9": "",
-      "custom10": "",
-      "flagColor": "",
-      "flagText": "",
-      "statusCode": 0,
-      "lang": "pt",
-      "referer": "iuri_rosa",
-      "refererEditable": "iuri_rosa",
-      "reference": "",
-      "channel": "direct",
-      "apiSourceId": 0,
-      "apiSource": "Direct",
-      "apiReference": "",
-      "allowChannelUpdate": "all",
-      "allowAutoAction": "enable",
-      "allowReview": "default",
-      "allowCancellation": {
-        "type": "daysBeforeArrival",
-        "daysBeforeArrivalValue": 2
-      },
-      "invoiceeId": null,
       "bookingTime": "2026-02-12T19:49:04Z",
       "modifiedTime": "2026-02-15T10:07:22Z",
-      "cancelTime": null,
       "price": 713,
       "deposit": 0,
       "tax": 13,
-      "commission": 100,
-      "rateDescription": "Display name for the Offer 1 Standard - Portuguese, \r\n2026-02-16 100 2 persons,",
-      "stripeToken": null,
-      "pcibookingToken": null,
-      "apiMessage": ""
+      "commission": 100
     },
-    "infoItems": [],
     "invoiceItems": [
       {
         "id": 148343768,
         "bookingId": 82279106,
         "type": "charge",
-        "subType": 1,
         "description": "Room",
-        "status": "7.00",
         "qty": 1,
         "amount": 500,
-        "lineTotal": 500,
-        "vatRate": 20,
-        "invoiceeId": null,
-        "createdBy": 11764,
-        "createTime": "2026-02-12T19:49:04Z"
-      },
-      {
-        "id": 148343769,
-        "bookingId": 82279106,
-        "type": "charge",
-        "subType": 3,
-        "description": "limp 13.4%",
-        "status": "",
-        "qty": 1,
-        "amount": 13,
-        "lineTotal": 13,
-        "vatRate": 0,
-        "invoiceeId": null,
-        "createdBy": 11764,
-        "createTime": "2026-02-12T19:49:04Z"
-      },
-      {
-        "id": 148343770,
-        "bookingId": 82279106,
-        "type": "charge",
-        "subType": 15,
-        "description": "",
-        "status": "",
-        "qty": 1,
-        "amount": 200,
-        "lineTotal": 200,
-        "vatRate": 0,
-        "invoiceeId": null,
-        "createdBy": 11764,
-        "createTime": "2026-02-12T19:49:04Z"
+        "vatRate": 20
       }
     ],
     "messages": [],
     "retries": 0
   }
 ]
-```
 
-### Triggers
+Payload Handling Rules
 
-The channel manager sends webhooks for:
-- Booking created
-- Booking updated (any change)
-- Booking cancelled
+Payload may contain multiple bookings.
 
-### Required Behavior
+Unknown fields must be tolerated.
 
-Each webhook must upsert the booking in HostSync:
+Duplicate deliveries must not create duplicate records.
 
-- Create if new
-- Update if existing
+invoiceItems must be stored even if unused in Phase 1.
 
-If booking is cancelled:
-- Mark booking as cancelled in HostSync
-- Invalidate any existing check-in token
-- Prevent check-in emails from being sent
-- Prevent SIBA/SEF submission jobs from executing
+6. Check-In Link Generation
 
-Webhook payload data is stored as the operational source of truth for bookings.
+When booking is received:
 
----
+Generate secure random token (high entropy, unguessable)
 
-## 2. Check-In Link Generation
+Store token hashed server-side
 
-When a booking is received:
+Token validity tied to booking status and dates
 
-1. HostSync generates a secure random token (unguessable, high entropy).
-2. Token is stored server-side (hashed).
-3. Token expiry is validated by booking status and dates.
-
-HostSync then calls the channel manager API to set:
+HostSync must call channel manager API:
 
 GuestCheckIn_URL=https://hostsync/checkin/{token}
 
 
-The channel manager uses this URL in its own auto-actions to email the guest.
+If booking becomes cancelled:
 
-If a booking becomes cancelled at any time:
-- The token must become invalid immediately.
+Token must become invalid immediately
 
----
+7. Guest Online Check-In
 
-## 3. Guest Online Check-In Page (Token Access)
+Access is token-based only.
 
-Access is token-based only (no booking ID or name entry).
+No booking ID or name lookup.
 
-Initial page must show minimal booking context.
+Guest must complete legally required SIBA/SEF fields:
 
-Guest completes legally required fields for Portugal SIBA/SEF:
-- Identity document details
-- Nationality
-- Address
-- Dates
-- Other required fields
+Identity document details
 
-### On Successful Submission
+Nationality
+
+Address
+
+Arrival/departure confirmation
+
+Other required legal fields
+
+On Successful Submission
 
 HostSync must:
 
-1. Validate all fields
-2. Store guest data in HostSync database
-3. Mark check-in as completed internally
-4. Call channel manager API:
+Validate fields
+
+Store guest data
+
+Mark check-in completed
+
+Call channel manager API:
 
 GuestCheckIn=OK
 
+8. SIBA/SEF Submission
 
-This indicates the guest successfully completed the form.
+Submission is scheduled:
 
-If booking is cancelled after submission:
-- Data remains until retention rules apply
-- Submission logic follows business rules
+1 day after check-in completion
 
----
+Submission only if:
 
-## 4. SIBA/SEF Submission (Scheduled)
+Booking not cancelled
 
-SIBA/SEF submission is scheduled:
+Guest data complete
 
-- 1 day after guest check-in
+Not already successfully submitted
 
-Submission occurs only if:
-- Booking is not cancelled
-- Guest data is complete
-- Submission not already successful
+Submission States
 
-HostSync maintains internal submission states:
+pending
 
-- pending
-- retrying
-- submitted
-- failed
-- cancelled
+retrying
+
+submitted
+
+failed
+
+cancelled
 
 HostSync is always the source of truth.
 
----
+9. Result Handling
+Success
 
-## 5. SIBA/SEF Result Handling
+Mark as submitted
 
-### Success
+Store timestamp and reference ID
 
-When SIBA/SEF confirms success:
-
-- Mark submission as `submitted`
-- Store submission timestamp and reference ID (if provided)
-- Call channel manager API:
+Call:
 
 SIBA_SEF=OK
 
-
----
-
-### Permanent Failure (Guest Data / Validation Errors)
+Permanent Failure (Validation)
 
 Examples:
-- Missing required fields
-- Invalid document number
-- Invalid nationality
-- API validation rejection
+
+Missing required fields
+
+Invalid document number
+
+API validation rejection
 
 Actions:
 
-- Mark submission as `failed`
-- Store error code and message (sanitized)
-- Call channel manager API:
+Mark as failed
+
+Store sanitized error message
+
+Call:
 
 SIBA_SEF=FAIL
 
-
----
-
-### Temporary Failure (Technical / Retryable Errors)
+Temporary Failure (Retryable)
 
 Examples:
-- Timeouts
-- 5xx responses
-- Rate limiting
-- Connectivity issues
+
+Timeouts
+
+5xx responses
+
+Rate limits
 
 Actions:
 
-- Mark submission as `retrying`
-- Retry with exponential backoff
-- Do NOT set `SIBA_SEF=FAIL`
+Mark as retrying
 
-Only set FAIL if retries are exhausted or validation error is returned.
+Retry with exponential backoff
 
-Info codes must be idempotent.
+Do NOT set FAIL unless retries exhausted
 
----
+10. Background Jobs & Queues
 
-## 6. Export Batches (Every 15 Days)
+All external integrations must be asynchronous.
 
-Every 15 days HostSync creates an immutable export batch.
+Queue workers handle:
 
-### Inclusion Rules
+SIBA/SEF submissions
 
-A batch includes only records where:
+Export generation
 
-- Guest check-in completed
-- SIBA/SEF submission status = `submitted`
-- Record not included in any previous batch
+Email delivery
 
-Pending, failed, or cancelled records are excluded.
+Cloud uploads
 
----
+Rules:
 
-### Batch Creation
+No blocking HTTP requests
 
-When a batch is created:
+Exponential backoff
 
-- period_start and period_end are fixed
-- records are linked to the batch
-- CSV is generated
-- SHA256 hash, byte size, and record count are calculated
+Default max attempts: 5 (configurable)
 
-Batch contents are immutable.
+11. Export Batches (Every 15 Days)
 
-Manual “Generate batch now” must be available for onboarding/support.
+Every 15 days HostSync creates immutable export batches.
 
----
+Inclusion Rules
 
-## 7. Export Delivery
+Include only records where:
 
-### Cloud Storage (Preferred)
+Check-in completed
 
-If customer connected Google Drive / OneDrive / Dropbox:
+Submission status = submitted
 
-- Upload CSV to provider
-- Store delivery metadata:
-  - provider file ID
-  - timestamps
-  - SHA256
-  - status
+Not included in previous batch
 
----
+Batch Creation
 
-### Encrypted Email Fallback
+On creation:
 
-If no cloud storage is connected:
+Fix period_start and period_end
 
-- Generate CSV
-- Encrypt file (ZIP AES or PGP)
-- Email encrypted file to customer
-- Keep batch downloadable in UI for 30 days
+Link records to batch
 
-Email delivery is fallback only.
+Generate CSV
 
----
+Calculate SHA256
 
-## 8. Retention Rules
+Calculate byte size
 
-### Guest Personal Data
+Record count
 
-- Deleted 30 days after checkout
-- Must not be reconstructable after deletion
+Manual “Generate Batch Now” must be available.
 
-### Backups and Binlogs
+12. Export Delivery
+Cloud Storage (Preferred)
 
-- Retained max 30–35 days
-- Encrypted
-- Stored externally
+If connected:
 
-Cluster replication is not backup.
+Upload CSV
 
-### Export Files
+Store:
 
-- Available for download max 30 days after batch creation
-- Deleted after 30 days
+Provider file ID
 
-### Long-Term Logs (No PII)
+Timestamp
+
+SHA256
+
+Status
+
+Encrypted Email Fallback
+
+If no cloud provider:
+
+Encrypt CSV (ZIP AES or PGP)
+
+Email to customer
+
+Allow UI download for 30 days
+
+13. Retention Rules
+Guest Personal Data
+
+Deleted 30 days after checkout
+
+Not reconstructable
+
+Backups & Binlogs
+
+Max 30–35 days retention
+
+Encrypted
+
+Stored externally
+
+Replication ≠ backup
+
+Export Files
+
+Deleted 30 days after batch creation
+
+Long-Term Logs (No PII)
 
 Retained up to 10 years:
-- export_batch_id
-- timestamps
-- success/failure
-- provider confirmation IDs
-- SHA256
-- byte size
-- schema version
 
-No personal data is stored in logs.
+export_batch_id
 
----
+timestamps
 
-## 9. Customer Admin UI (Phase 1)
+success/failure
 
-Authenticated customers must have access to:
+provider IDs
 
-- Booking list and status
-- Guest check-in status
-- SIBA/SEF submission status + last error
-- Export batches:
-  - download (30-day window)
-  - resend
-  - connect cloud storage
-  - configure export email
+SHA256
 
----
+byte size
 
-## 10. Guest UI
+schema version
+
+No personal data stored in logs.
+
+14. Customer Admin UI
+
+Authenticated tenants must access:
+
+Booking list + status
+
+Guest check-in status
+
+SIBA/SEF status + last error
+
+Export batches:
+
+Download (30 days)
+
+Resend
+
+Connect cloud storage
+
+Configure export email
+
+15. Guest UI
 
 Token-based page must support:
 
-- Check-in form
-- Confirmation screen
-- Error states:
-  - booking cancelled
-  - link expired
-  - already submitted
+Check-in form
 
----
+Confirmation screen
 
-## 11. Phase Roadmap
+Error states:
 
-Phase 1:
-- Online Check-In + SIBA/SEF Submission
+Booking cancelled
 
-Future phases (not part of this document):
+Link expired
 
-2. Portuguese invoicing integrations (KeyInvoice, Moloni, Fact)
-3. HostSync customer billing system (usage-based)
-4. INE reporting and automated submissions  
-5. Optional booking portal
+Already submitted
 
----
+16. Internal API Endpoints (Minimum)
+POST /webhooks/channel-manager
 
-End of Phase 1 specification.
+GET  /checkin/{token}
+POST /checkin/{token}/submit
 
+POST /sef/submit
+
+POST /exports/generate
+
+GET /admin/bookings
+GET /admin/exports
+
+17. Security Requirements
+
+HTTPS enforced
+
+Tokens hashed at rest
+
+Signed webhooks
+
+Rate limiting
+
+Audit logs
+
+Strict tenant isolation
+
+End of Phase 1 Specification
